@@ -41,7 +41,7 @@ use project::{
     trusted_worktrees::TrustedWorktrees,
 };
 use remote::RemoteConnectionOptions;
-use settings::{Settings as _, SettingsStore};
+use settings::{Settings as _, SettingsLocation, SettingsStore, WorktreeId};
 
 use std::any::TypeId;
 use std::path::Path;
@@ -50,16 +50,18 @@ use std::time::Duration;
 use theme::ActiveTheme;
 use ui::{
     Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    PopoverMenuHandle, TintColor, Tooltip, prelude::*, right_click_menu,
+    utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
+use util::rel_path::RelPath;
 use workspace::{
     AccessibleMode, MultiWorkspace, ToggleWorktreeSecurity, Workspace,
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
 
-use zed_actions::OpenRemote;
+use zed_actions::{OpenRemote, OpenSettingsAt, OpenSettingsAtTarget};
 
 pub use onboarding_banner::restore_banner;
 
@@ -256,7 +258,23 @@ impl Render for TitleBar {
         let mut project_name = None;
         let mut repository = None;
         let mut linked_worktree_name = None;
-        if let Some(worktree) = self.effective_active_worktree(cx) {
+        let worktree = self.effective_active_worktree(cx);
+        let worktree_id = worktree.as_ref().and_then(|worktree| {
+            let worktree = worktree.read(cx);
+            worktree.root_entry()?.is_dir().then_some(worktree.id())
+        });
+        let project_color = worktree_id.and_then(|worktree_id| {
+            TitleBarSettings::get(
+                Some(SettingsLocation {
+                    worktree_id,
+                    path: RelPath::empty(),
+                }),
+                cx,
+            )
+            .project_color
+        });
+
+        if let Some(worktree) = worktree {
             let path_style = worktree.read(cx).path_style();
             repository = self.get_repository_for_worktree(&worktree, path_style, cx);
             let worktree_abs_path = worktree.read(cx).abs_path();
@@ -350,9 +368,14 @@ impl Render for TitleBar {
                         .when(render_project_items, |title_bar| {
                             title_bar
                                 .when(title_bar_settings.show_project_items, |title_bar| {
-                                    title_bar
-                                        .children(self.render_project_host(cx))
-                                        .child(self.render_project_name(project_name, window, cx))
+                                    title_bar.children(self.render_project_host(cx)).child(
+                                        self.render_project_name_with_color_menu(
+                                            project_name,
+                                            worktree_id,
+                                            window,
+                                            cx,
+                                        ),
+                                    )
                                 })
                                 .when_some(
                                     repository.filter(|_| is_git_enabled),
@@ -429,19 +452,18 @@ impl Render for TitleBar {
         );
 
         if show_menus {
-            self.platform_titlebar.update(cx, |this, _| {
+            let title_bar_color = self.platform_titlebar.update(cx, |this, cx| {
                 this.set_button_layout(button_layout);
+                this.set_project_color(project_color);
                 this.set_children(
                     self.application_menu
                         .clone()
                         .map(|menu| menu.into_any_element()),
                 );
+                this.title_bar_color(window, cx)
             });
 
             let height = platform_title_bar_height(window);
-            let title_bar_color = self.platform_titlebar.update(cx, |platform_titlebar, cx| {
-                platform_titlebar.title_bar_color(window, cx)
-            });
 
             v_flex()
                 .w_full()
@@ -459,6 +481,7 @@ impl Render for TitleBar {
         } else {
             self.platform_titlebar.update(cx, |this, _| {
                 this.set_button_layout(button_layout);
+                this.set_project_color(project_color);
                 this.set_children(children);
             });
             self.platform_titlebar.clone().into_any_element()
@@ -495,6 +518,17 @@ impl TitleBar {
         };
 
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.observe_global::<SettingsStore>(|_, cx| cx.notify()));
+        subscriptions.push(cx.subscribe(&project, |_, _, event, cx| {
+            if matches!(
+                event,
+                project::Event::WorktreeAdded(_)
+                    | project::Event::WorktreeRemoved(_)
+                    | project::Event::WorktreeOrderChanged
+            ) {
+                cx.notify();
+            }
+        }));
         subscriptions.push(
             cx.observe(&workspace.weak_handle().upgrade().unwrap(), |_, _, cx| {
                 cx.notify()
@@ -809,6 +843,38 @@ impl TitleBar {
                 })
                 .into_any_element(),
         )
+    }
+
+    fn render_project_name_with_color_menu(
+        &self,
+        name: Option<SharedString>,
+        worktree_id: Option<WorktreeId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let project_button = self
+            .render_project_name(name, window, cx)
+            .into_any_element();
+        let Some(worktree_id) = worktree_id else {
+            return project_button;
+        };
+
+        right_click_menu("project-color-menu")
+            .trigger(move |_, _, _| project_button)
+            .menu(move |window, cx| {
+                ContextMenu::build(window, cx, |menu, _, _| {
+                    menu.action(
+                        "Change Project Color",
+                        Box::new(OpenSettingsAt {
+                            path: "project_title_bar_color".into(),
+                            target: Some(OpenSettingsAtTarget::Project {
+                                worktree_id: worktree_id.to_usize(),
+                            }),
+                        }),
+                    )
+                })
+            })
+            .into_any_element()
     }
 
     fn render_project_name(
@@ -1478,7 +1544,82 @@ mod tests {
         TestAppContext, VisualTestContext,
     };
     use platform_title_bar::SidebarWindowControls;
-    use settings::{SidebarSide, TitleBarVisibility};
+    use settings::{LocalSettingsKind, LocalSettingsPath, SidebarSide, TitleBarVisibility};
+
+    #[gpui::test]
+    async fn test_project_title_bar_color(cx: &mut TestAppContext) {
+        let (workspace, cx) = init_test(TitleBarVisibility::Always, cx).await;
+        let (project, fs) = workspace.read_with(cx, |workspace, cx| {
+            let project = workspace.project().clone();
+            let fs = project.read(cx).fs().clone();
+            (project, fs)
+        });
+        let first_path = Path::new(util::path!("/first"));
+        let second_path = Path::new(util::path!("/second"));
+
+        for path in [first_path, second_path] {
+            fs.create_dir(path).await.expect("create project directory");
+        }
+        let first_worktree = project
+            .update(cx, |project, cx| {
+                project.create_worktree(first_path, true, cx)
+            })
+            .await
+            .expect("open first project directory");
+        project
+            .update(cx, |project, cx| {
+                project.create_worktree(second_path, true, cx)
+            })
+            .await
+            .expect("open second project directory");
+        let first_worktree_id = first_worktree.read_with(cx, |worktree, _| worktree.id());
+
+        let title_bar_background = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            workspace.update_in(cx, |workspace, window, cx| {
+                let title_bar = workspace
+                    .titlebar_item()
+                    .and_then(|item| item.downcast::<TitleBar>().ok())
+                    .expect("title bar is visible");
+                title_bar
+                    .read(cx)
+                    .platform_titlebar
+                    .read(cx)
+                    .title_bar_color(window, cx)
+            })
+        };
+        let set_color = |json, cx: &mut VisualTestContext| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store
+                    .set_local_settings(
+                        first_worktree_id,
+                        LocalSettingsPath::InWorktree(RelPath::empty().to_owned().into_arc()),
+                        LocalSettingsKind::Settings,
+                        json,
+                        cx,
+                    )
+                    .expect("update project settings");
+            });
+        };
+
+        let theme_background = title_bar_background(cx);
+        let color = Some(r##"{"project_title_bar_color":"#3B82F6"}"##);
+        let tinted_background =
+            theme_background.blend(gpui::Hsla::from(gpui::rgb(0x3B82F6)).opacity(0.25));
+        set_color(color, cx);
+        assert_eq!(title_bar_background(cx), tinted_background);
+
+        set_color(Some("{}"), cx);
+        assert_eq!(title_bar_background(cx), theme_background);
+
+        set_color(color, cx);
+        assert_eq!(title_bar_background(cx), tinted_background);
+        project.update(cx, |project, cx| {
+            project.remove_worktree(first_worktree_id, cx);
+        });
+        assert_eq!(title_bar_background(cx), theme_background);
+    }
 
     #[gpui::test]
     async fn test_title_bar_visibility(cx: &mut TestAppContext) {

@@ -551,6 +551,7 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<bool>(render_toggle_button)
         .add_basic_renderer::<String>(render_text_field)
         .add_basic_renderer::<SharedString>(render_text_field)
+        .add_basic_renderer::<settings::ThemeColor>(render_text_field)
         .add_basic_renderer::<settings::SaturatingBool>(render_toggle_button)
         .add_basic_renderer::<settings::CursorShape>(render_dropdown)
         .add_basic_renderer::<settings::RestoreOnStartupBehavior>(render_dropdown)
@@ -726,7 +727,10 @@ fn select_settings_file_target(
         .iter()
         .position(|(file, _)| match target_file {
             SettingsFileTarget::User => matches!(file, SettingsUiFile::User),
-            SettingsFileTarget::Project(worktree_id) => file.worktree_id() == Some(worktree_id),
+            SettingsFileTarget::Project(worktree_id) => matches!(
+                file,
+                SettingsUiFile::Project((id, path)) if *id == worktree_id && path.is_empty()
+            ),
         });
     if let Some(file_index) = file_index {
         settings_window.change_file(file_index, window, cx);
@@ -860,14 +864,18 @@ fn open_settings_editor_with(
         .find_map(|window| window.downcast::<SettingsWindow>());
 
     if let Some(existing_window) = existing_window {
-        existing_window
-            .update(cx, |settings_window, window, cx| {
-                settings_window.original_window = workspace_handle;
-
-                window.activate_window();
-                callback(settings_window, window, cx);
-            })
-            .ok();
+        cx.defer(move |cx| {
+            existing_window
+                .update(cx, |settings_window, window, cx| {
+                    if settings_window.original_window != workspace_handle {
+                        settings_window.original_window = workspace_handle;
+                        settings_window.fetch_files(window, cx);
+                    }
+                    window.activate_window();
+                    callback(settings_window, window, cx);
+                })
+                .ok();
+        });
         return;
     }
 
@@ -1624,6 +1632,9 @@ impl std::fmt::Debug for FileMask {
         if self.contains(PROJECT) {
             items.push("LOCAL");
         }
+        if self.contains(PROJECT_ROOT) {
+            items.push("PROJECT_ROOT");
+        }
         if self.contains(SERVER) {
             items.push("SERVER");
         }
@@ -1635,6 +1646,7 @@ impl std::fmt::Debug for FileMask {
 const USER: FileMask = FileMask(1 << 0);
 const PROJECT: FileMask = FileMask(1 << 2);
 const SERVER: FileMask = FileMask(1 << 3);
+const PROJECT_ROOT: FileMask = FileMask(1 << 4);
 
 impl std::ops::BitAnd for FileMask {
     type Output = Self;
@@ -1775,6 +1787,7 @@ impl SettingsUiFile {
     fn mask(&self) -> FileMask {
         match self {
             SettingsUiFile::User => USER,
+            SettingsUiFile::Project((_, path)) if path.is_empty() => PROJECT | PROJECT_ROOT,
             SettingsUiFile::Project(_) => PROJECT,
             SettingsUiFile::Server(_) => SERVER,
         }
@@ -2621,10 +2634,15 @@ impl SettingsWindow {
 
             for worktree in all_projects(self.original_window.as_ref(), cx)
                 .flat_map(|project| project.read(cx).visible_worktrees(cx))
-                .filter(|tree| !self.worktree_root_dirs.contains_key(&tree.read(cx).id()))
             {
                 let worktree = worktree.read(cx);
                 let worktree_id = worktree.id();
+                let path = RelPath::empty().to_owned().into_arc();
+                let settings_ui_file = SettingsUiFile::Project((worktree_id, path));
+                if ui_files.iter().any(|(file, _)| file == &settings_ui_file) {
+                    continue;
+                }
+
                 let Some(directory_name) = worktree.root_dir().and_then(|file| {
                     file.file_name()
                         .map(|os_string| os_string.to_string_lossy().to_string())
@@ -2633,9 +2651,6 @@ impl SettingsWindow {
                 };
 
                 missing_worktrees.push((worktree_id, directory_name));
-                let path = RelPath::empty().to_owned().into_arc();
-
-                let settings_ui_file = SettingsUiFile::Project((worktree_id, path));
 
                 let focus_handle = prev_files
                     .iter()

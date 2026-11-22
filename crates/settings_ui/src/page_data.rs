@@ -10,8 +10,9 @@ use theme::SystemAppearance;
 use ui::IntoElement;
 
 use crate::{
-    ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
-    SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
+    ActionLink, DynamicItem, PROJECT, PROJECT_ROOT, SettingField, SettingItem,
+    SettingsFieldMetadata, SettingsPage, SettingsPageItem, SubPageLink, USER, active_language,
+    all_language_names,
     pages::{
         open_audio_test_window, render_edit_prediction_setup_page, render_external_agents_page,
         render_llm_providers_page, render_mcp_servers_page, render_sandbox_settings_page,
@@ -4423,9 +4424,29 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn title_bar_section() -> [SettingsPageItem; 13] {
+    fn title_bar_section() -> [SettingsPageItem; 14] {
         [
             SettingsPageItem::SectionHeader("Title Bar"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Project Title Bar Color",
+                description: "Hex color used to tint this project's title bar. Clear the field and press Enter to restore the theme color.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("project_title_bar_color"),
+                    pick: |settings_content| {
+                        settings_content.project.project_title_bar_color.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.project.project_title_bar_color = value;
+                    },
+                }),
+                metadata: Some(Box::new(SettingsFieldMetadata {
+                    display_confirm_button: true,
+                    display_clear_button: true,
+                    ..Default::default()
+                })),
+                files: PROJECT_ROOT,
+            }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show Title Bar",
                 description: "When to show the title bar and its window controls.",

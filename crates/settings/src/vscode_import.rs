@@ -548,6 +548,7 @@ impl VsCodeSettings {
             context_server_timeout: None,
             load_direnv: None,
             git_hosting_providers: None,
+            project_title_bar_color: None,
             disable_ai: None,
         }
     }

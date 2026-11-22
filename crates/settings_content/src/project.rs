@@ -14,7 +14,7 @@ use util::serde::default_true;
 
 use crate::{
     AllLanguageSettingsContent, DelayMs, ExtendingVec, ParseStatus, ProjectTerminalSettingsContent,
-    RootUserSettings, SaturatingBool, SplicingVec, fallible_options,
+    RootUserSettings, SaturatingBool, SplicingVec, ThemeColor, fallible_options,
 };
 
 #[with_fallible_options]
@@ -81,6 +81,9 @@ pub struct ProjectSettingsContent {
     /// The list of custom Git hosting providers.
     pub git_hosting_providers: Option<ExtendingVec<GitHostingProviderConfig>>,
 
+    /// Hex color used to tint the title bar for this project.
+    pub project_title_bar_color: Option<ThemeColor>,
+
     /// Whether to disable all AI features in Zed.
     ///
     /// Default: false
@@ -90,7 +93,8 @@ pub struct ProjectSettingsContent {
 crate::fallible_options::flattened_deserialize!(ProjectSettingsContent {
     sections: { all_languages, worktree },
     options: {
-        terminal, context_server_timeout, load_direnv, git_hosting_providers, disable_ai,
+        terminal, context_server_timeout, load_direnv, git_hosting_providers,
+        project_title_bar_color, disable_ai,
     },
     defaults: { lsp, dap, context_servers },
 });

@@ -6433,6 +6433,12 @@ Run the {#action theme_selector::Toggle} action in the command palette to see a 
 
 Run the {#action theme_selector::Toggle} action in the command palette to see a current list of valid theme names.
 
+## Project Title Bar Color
+
+Set `project_title_bar_color` to a hex color such as `"#3B82F6"` in the
+project's root `.zed/settings.json`. Zed blends the color with the current
+theme's title bar background. The default, `"#00000000"`, is transparent.
+
 ## Title Bar
 
 - Description: Whether or not to show various elements in the title bar

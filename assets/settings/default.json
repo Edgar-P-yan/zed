@@ -616,6 +616,9 @@
   //    on notched displays, the area around the notch.
   //     "simple"
   "fullscreen_mode": "native",
+  // The hex color used to tint the title bar. Set this in a project's
+  // .zed/settings.json to distinguish it from other projects.
+  "project_title_bar_color": "#00000000",
   // Titlebar related settings
   "title_bar": {
     // When to show the title bar: "always" | "never" | "hide_in_full_screen".

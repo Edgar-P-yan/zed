@@ -139,6 +139,19 @@ To disable this behavior use:
 
 ### Titlebar
 
+To give a project its own title bar tint, right-click its name in the title bar
+and select **Change Project Color**. Enter a hex color and press Enter to save.
+You can also set the color in the project's root `.zed/settings.json`.
+
+```json [settings]
+{
+  "project_title_bar_color": "#3B82F6"
+}
+```
+
+In a window with multiple folders, the color follows the folder shown in the
+title bar. Clear the color and press Enter to return to the theme color.
+
 ```json [settings]
   // Control which items are shown/hidden in the title bar
   "title_bar": {

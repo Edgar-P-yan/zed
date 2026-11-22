@@ -77,6 +77,7 @@ pub struct PlatformTitleBar {
     should_move: bool,
     system_window_tabs: Option<Entity<SystemWindowTabs>>,
     button_layout: Option<WindowButtonLayout>,
+    project_color: Option<Hsla>,
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
 }
 
@@ -92,6 +93,7 @@ impl PlatformTitleBar {
             should_move: false,
             system_window_tabs,
             button_layout: None,
+            project_color: None,
             multi_workspace: None,
         }
     }
@@ -110,16 +112,21 @@ impl PlatformTitleBar {
         self.multi_workspace = Some(multi_workspace);
     }
 
-    pub fn title_bar_color(&self, window: &mut Window, cx: &mut Context<Self>) -> Hsla {
-        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-            if window.is_window_active() && !self.should_move {
-                cx.theme().colors().title_bar_background
-            } else {
-                cx.theme().colors().title_bar_inactive_background
-            }
+    pub fn title_bar_color(&self, window: &Window, cx: &App) -> Hsla {
+        let colors = cx.theme().colors();
+        let background = if cfg!(any(target_os = "linux", target_os = "freebsd"))
+            && (!window.is_window_active() || self.should_move)
+        {
+            colors.title_bar_inactive_background
         } else {
-            cx.theme().colors().title_bar_background
-        }
+            colors.title_bar_background
+        };
+        self.project_color
+            .map_or(background, |color| background.blend(color.opacity(0.25)))
+    }
+
+    pub fn set_project_color(&mut self, color: Option<Hsla>) {
+        self.project_color = color;
     }
 
     pub fn set_children<T>(&mut self, children: T)
