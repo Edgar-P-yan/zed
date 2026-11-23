@@ -6,7 +6,7 @@ added, changed, or removed. Merge `upstream/main` into the fork's `main` when
 synchronizing, preserve the fork changes documented in `FORK.md`, and verify
 them after resolving conflicts. Push the integrated `main` to `origin`.
 
-- Build with `script/build-zed-personal`. It puts the app at `target/debug/bundle/osx/Zed Personal.app`.
+- Build with `script/build-zed-personal`. It installs the signed app at `~/Applications/Zed Personal.app`.
 - The macOS app uses `~/Library/Application Support/Zed Personal` for data and its `config/` subdirectory for settings, keymaps, and themes.
 - To replace the Personal profile with regular Zed's data, quit the Zed instances using both profiles and run `script/import-zed-profile`. It backs up the existing Personal profile and maps the stable workspace database to the development channel. See `FORK.md` for the paths and Keychain behavior.
 

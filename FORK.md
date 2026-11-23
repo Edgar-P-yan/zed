@@ -11,13 +11,14 @@ fork change is added, changed, or removed.
 
 ## macOS build and profile
 
-Run `script/build-zed-personal` from the checkout to build and locally sign the
-development app. It uses the checkout's Rust toolchain, Xcode, CMake, and
-Python 3. Open the resulting app from Finder.
+Run `script/build-zed-personal` from the checkout to build, locally sign, and
+install the development app in your user Applications folder. It uses the
+checkout's Rust toolchain, Xcode, CMake, and Python 3. Open the installed app
+from Finder.
 
 | Item | Location |
 | --- | --- |
-| App bundle, relative to the checkout | `target/debug/bundle/osx/Zed Personal.app` |
+| Installed app bundle | `~/Applications/Zed Personal.app` |
 | Personal app data | `~/Library/Application Support/Zed Personal` |
 | Personal config | `~/Library/Application Support/Zed Personal/config` |
 | User settings and keymap | `config/settings.json` and `config/keymap.json` inside the Personal data folder |
