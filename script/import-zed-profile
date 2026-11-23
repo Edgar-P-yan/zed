@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Copy a macOS Zed profile into a development build's user data directory."""
+
+import argparse
+import fcntl
+import os
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from contextlib import closing
+from datetime import datetime
+from pathlib import Path
+
+
+def validate_paths(source_data, source_config, destination):
+    for source in (source_data, source_config):
+        if not source.is_dir():
+            raise ValueError(f"Source directory does not exist: {source}")
+        if destination == source or source in destination.parents or destination in source.parents:
+            raise ValueError(f"Source and destination overlap: {source} and {destination}")
+    if destination.exists() and not destination.is_dir():
+        raise ValueError(f"Destination is not a directory: {destination}")
+
+
+def check_databases_closed(*roots):
+    files = sorted({
+        str(path)
+        for root in roots
+        for path in root.rglob("*")
+        if path.name.endswith((".sqlite", ".sqlite3", ".db", ".mdb"))
+        and not path.is_symlink()
+        and path.is_file()
+    })
+    if not files:
+        return
+    result = subprocess.run(
+        ["/usr/sbin/lsof", "-t", "--", *files],
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        raise RuntimeError("Quit Zed and any fork using these profiles, then run the import again.")
+    if result.returncode != 1 or result.stderr.strip():
+        raise RuntimeError(f"Could not verify the databases are closed. {result.stderr.strip()}")
+
+
+def copy_directory(source, destination):
+    destination.mkdir(exist_ok=True)
+    subprocess.run(["/bin/cp", "-cRpP", f"{source}/.", str(destination)], check=True)
+
+
+def archive_directory(directory, prefix):
+    archive = Path(tempfile.mkdtemp(prefix=prefix, dir=directory.parent))
+    return directory.rename(archive / directory.name)
+
+
+def copy_workspace_database(profile, source_channel, destination_channel):
+    database_dir = profile / "db"
+    source = database_dir / f"0-{source_channel}"
+    database = source / "db.sqlite"
+    sidecars = [source / f"{database.name}{suffix}" for suffix in ("-wal", "-shm", "-journal")]
+    if any(path.is_symlink() for path in (database_dir, source, database, *sidecars)):
+        raise ValueError("The copied workspace database or its sidecars contain a symlink.")
+    if not database.is_file():
+        print(f"No {source_channel} workspace database was found.")
+        return
+
+    target = database_dir / f"0-{destination_channel}"
+    if target != source:
+        if target.exists() or target.is_symlink():
+            archive_directory(target, f"saved-{target.name}-")
+        copy_directory(source, target)
+
+    with closing(sqlite3.connect(target / database.name)) as connection:
+        if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise RuntimeError("The copied workspace database failed its integrity check.")
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'"
+        ).fetchone():
+            workspaces = connection.execute("SELECT count(*) FROM workspaces").fetchone()[0]
+            print(f"Verified {workspaces} saved workspaces for the {destination_channel} build.")
+
+
+def import_profile(source_data, source_config, destination, source_channel, destination_channel):
+    validate_paths(source_data, source_config, destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    parent = os.open(destination.parent, os.O_RDONLY)
+    try:
+        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        check_databases_closed(source_data, source_config, destination)
+        with tempfile.TemporaryDirectory(prefix=".zed-import-", dir=destination.parent) as folder:
+            profile = Path(folder) / "profile"
+            copy_directory(source_data, profile)
+            config = profile / "config"
+            if source_config != source_data / "config":
+                if config.exists() or config.is_symlink():
+                    archive_directory(config, "saved-config-")
+                copy_directory(source_config, config)
+            profile.chmod(0o700)
+            copy_workspace_database(profile, source_channel, destination_channel)
+            check_databases_closed(source_data, source_config, destination)
+
+            backup = None
+            if destination.exists():
+                stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+                backup = archive_directory(destination, f"{destination.name} Before Import {stamp}-")
+            try:
+                profile.rename(destination)
+            except BaseException:
+                if backup is not None:
+                    backup.rename(destination)
+                raise
+        print(f"Imported profile: {destination}")
+        if backup is not None:
+            print(f"Previous profile: {backup}")
+    finally:
+        os.close(parent)
+
+
+def main():
+    home = Path.home()
+    support = home / "Library/Application Support"
+    channels = ("stable", "dev", "preview", "nightly")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source-data", type=Path, default=support / "Zed",
+        help="Source data directory (default: regular Zed)",
+    )
+    parser.add_argument(
+        "--source-config", type=Path, default=home / ".config/zed",
+        help="Source configuration directory (default: ~/.config/zed)",
+    )
+    parser.add_argument(
+        "--destination", type=Path, default=support / "Zed Personal",
+        help="Destination user data directory (default: Zed Personal)",
+    )
+    parser.add_argument("--source-channel", choices=channels, default="stable")
+    parser.add_argument("--destination-channel", choices=channels, default="dev")
+    args = parser.parse_args()
+    if sys.platform != "darwin":
+        parser.error("This script is for macOS.")
+    destination = args.destination.expanduser()
+    if destination.is_symlink():
+        parser.error(f"The destination is a symlink: {destination}")
+    try:
+        import_profile(
+            args.source_data.expanduser().resolve(),
+            args.source_config.expanduser().resolve(),
+            destination.resolve(),
+            args.source_channel,
+            args.destination_channel,
+        )
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"Import failed: {error}\n")
+
+
+if __name__ == "__main__":
+    main()

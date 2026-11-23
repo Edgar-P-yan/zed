@@ -1,3 +1,15 @@
+# Zed Personal fork
+
+This is a personal fork of Zed that reflects the owner's preferences. Develop
+fork changes directly on `main` and update `FORK.md` whenever a fork change is
+added, changed, or removed. Merge `upstream/main` into the fork's `main` when
+synchronizing, preserve the fork changes documented in `FORK.md`, and verify
+them after resolving conflicts. Push the integrated `main` to `origin`.
+
+- Build with `script/build-zed-personal`. It puts the app at `target/debug/bundle/osx/Zed Personal.app`.
+- The macOS app uses `~/Library/Application Support/Zed Personal` for data and its `config/` subdirectory for settings, keymaps, and themes.
+- To replace the Personal profile with regular Zed's data, quit the Zed instances using both profiles and run `script/import-zed-profile`. It backs up the existing Personal profile and maps the stable workspace database to the development channel. See `FORK.md` for the paths and Keychain behavior.
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.

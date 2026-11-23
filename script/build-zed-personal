@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Build and sign the local Zed Personal macOS development app."""
+
+import json
+import os
+import plistlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+APP_NAME = "Zed Personal"
+LAUNCHER = """#!/bin/sh
+set -eu
+export ZED_DEVELOPMENT_USE_KEYCHAIN=1
+app_binary="${0%/*}/zed"
+for argument in "$@"; do
+    case "$argument" in
+        --user-data-dir|--user-data-dir=*) exec "$app_binary" "$@" ;;
+    esac
+done
+exec "$app_binary" --user-data-dir "$HOME/Library/Application Support/Zed Personal" "$@"
+"""
+
+
+def generate_licenses(repo):
+    licenses = repo / "assets/licenses.md"
+    inputs = (
+        "Cargo.lock", "assets/themes/LICENSES", "assets/icons/LICENSES",
+        "script/generate-licenses", "script/licenses/zed-licenses.toml",
+        "script/licenses/template.md.hbs",
+    )
+    if licenses.is_file() and all(
+        licenses.stat().st_mtime >= (repo / path).stat().st_mtime for path in inputs
+    ):
+        return
+    with tempfile.TemporaryDirectory(prefix="zed-personal-licenses-", dir=licenses.parent) as folder:
+        generated = Path(folder) / licenses.name
+        subprocess.run(["script/generate-licenses", str(generated)], cwd=repo, check=True)
+        generated.replace(licenses)
+
+
+def package_app(repo, build, version, metadata):
+    resources = repo / "crates/zed/resources"
+    destination = build / "bundle/osx" / f"{APP_NAME}.app"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    info = {
+        "CFBundleDisplayName": APP_NAME,
+        "CFBundleExecutable": "zed-launcher",
+        "CFBundleIconFile": "AppIcon.icns",
+        "CFBundleIdentifier": metadata["identifier"],
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": APP_NAME,
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "LSApplicationCategoryType": "public.app-category.developer-tools",
+        "LSMinimumSystemVersion": metadata["osx_minimum_system_version"],
+        "NSHighResolutionCapable": True,
+        "NSPrincipalClass": "NSApplication",
+    }
+    for name in ("Permissions.plist", "SupportedPlatforms.plist"):
+        fragment = (resources / "info" / name).read_bytes()
+        info.update(plistlib.loads(b'<plist version="1.0"><dict>' + fragment + b"</dict></plist>"))
+
+    with tempfile.TemporaryDirectory(prefix=".zed-personal-", dir=destination.parent) as folder:
+        staging = Path(folder)
+        app = staging / destination.name
+        contents = app / "Contents"
+        binaries = contents / "MacOS"
+        bundle_resources = contents / "Resources"
+        binaries.mkdir(parents=True)
+        bundle_resources.mkdir()
+        for binary in ("zed", "cli"):
+            subprocess.run(["/bin/cp", "-cp", build / binary, binaries / binary], check=True)
+        subprocess.run(
+            ["/bin/cp", "-p", resources / "Document.icns", bundle_resources / "AppIcon.icns"],
+            check=True,
+        )
+        (contents / "Info.plist").write_bytes(plistlib.dumps(info))
+        (contents / "PkgInfo").write_bytes(b"APPL????")
+        launcher = binaries / "zed-launcher"
+        launcher.write_text(LAUNCHER)
+        launcher.chmod(0o755)
+        subprocess.run(["/usr/bin/plutil", "-lint", contents / "Info.plist"], check=True)
+        subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", app], check=True)
+        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app], check=True)
+
+        previous = staging / "previous.app"
+        if destination.exists() or destination.is_symlink():
+            if destination.is_symlink() or not destination.is_dir():
+                raise ValueError(f"Expected an app bundle at {destination}")
+            current_info = plistlib.loads((destination / "Contents/Info.plist").read_bytes())
+            if (
+                current_info.get("CFBundleName") != APP_NAME
+                or current_info.get("CFBundleIdentifier") != info["CFBundleIdentifier"]
+            ):
+                raise ValueError(f"Unexpected app bundle at {destination}")
+            destination.rename(previous)
+        try:
+            app.rename(destination)
+        except BaseException:
+            if previous.exists():
+                previous.rename(destination)
+            raise
+    print(f"Built {destination}")
+
+
+def main():
+    if sys.platform != "darwin":
+        raise SystemExit("Zed Personal's build script is for macOS.")
+
+    repo = Path(__file__).resolve().parent.parent
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = str(repo / "target")
+    environment.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=repo
+    ))
+    zed = next(package for package in metadata["packages"] if package["name"] == "zed")
+    generate_licenses(repo)
+    subprocess.run(
+        [
+            "cargo", "build", "--locked", "-p", "zed", "-p", "cli",
+            "--bin", "zed", "--bin", "cli", "--features", "util/debug-embed",
+        ],
+        cwd=repo, env=environment, check=True,
+    )
+    package_app(repo, repo / "target/debug", zed["version"], zed["metadata"]["bundle-dev"])
+
+
+if __name__ == "__main__":
+    main()
